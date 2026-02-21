@@ -1,6 +1,6 @@
+use crate::storage::db::Storage;
 use anyhow::Result;
 use std::path::PathBuf;
-use crate::storage::db::Storage;
 
 pub fn add_workspace(storage: &Storage, path: PathBuf) -> Result<()> {
     storage.add_workspace(path)

@@ -17,31 +17,35 @@ cargo install --path .
 ## Shell Integration
 Add this to your shell config (e.g., `~/.bashrc` or `~/.zshrc`):
 
-### Zsh
-```zsh
-g() {
-  local dir
-  dir="$(goto "$@")" && [ -n "$dir" ] && cd "$dir"
-}
-chpwd() {
-  goto register "$PWD"
-}
-# Register current directory on startup
-goto register "$PWD"
-```
-
-### Bash
+### Zsh / Bash
 ```bash
 g() {
   local dir
-  dir="$(goto "$@")" && [ -n "$dir" ] && cd "$dir"
+  if [ "$#" -eq 1 ] && [ "$1" = "-" ]; then
+    cd - || return
+    return
+  fi
+  # If no args, just run interactive
+  if [ $# -eq 0 ]; then
+    dir="$(goto)"
+  else
+    # Try auto mode first. If it fails (no match), run interactive.
+    # We use a temp variable to ensure we don't cd to empty strings.
+    dir="$(goto "$@" --auto 2>/dev/null)" || dir="$(goto "$@")"
+  fi
+  
+  if [ -n "$dir" ]; then
+    cd "$dir"
+  fi
 }
-# Record every cd/pushd/popd
-cd() { builtin cd "$@" && goto register "$PWD"; }
-pushd() { builtin pushd "$@" && goto register "$PWD"; }
-popd() { builtin popd "$@" && goto register "$PWD"; }
-# Register current directory on startup
-goto register "$PWD"
+
+gi() {
+  local dir
+  dir="$(goto "$@")"
+  if [ -n "$dir" ]; then
+    cd "$dir"
+  fi
+}
 ```
 
 ## Usage
@@ -54,6 +58,7 @@ goto index
 ### Search and Navigate
 ```bash
 g my-project
+gi my-project
 ```
 
 ### Tags

@@ -1,5 +1,5 @@
-use std::path::Path;
 use crate::storage::models::ProjectType;
+use std::path::Path;
 
 pub fn detect_project_type(path: &Path) -> ProjectType {
     if path.join(".git").exists() {

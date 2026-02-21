@@ -1,15 +1,44 @@
 mod cli;
 mod core;
+mod shell;
 mod storage;
 mod ui;
-mod shell;
 
 use anyhow::Result;
+use chrono::Utc;
 use clap::Parser;
-use cli::{Cli, Commands, WorkspaceAction, TagAction};
+use cli::{Cli, Commands, TagAction, WorkspaceAction};
+use std::path::{Path, PathBuf};
 use storage::db::Storage;
 use storage::models::VisitEvent;
-use chrono::Utc;
+
+fn is_direct_path_query(query: &str) -> bool {
+    query == "."
+        || query == ".."
+        || query.starts_with("./")
+        || query.starts_with("../")
+        || query.starts_with('/')
+}
+
+fn resolve_direct_directory_query(query: &str) -> Result<Option<PathBuf>> {
+    if !is_direct_path_query(query) {
+        return Ok(None);
+    }
+
+    let candidate = Path::new(query);
+    let abs_path = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(candidate)
+    };
+
+    if !abs_path.is_dir() {
+        return Ok(None);
+    }
+
+    let canonical = std::fs::canonicalize(&abs_path).unwrap_or(abs_path);
+    Ok(Some(canonical))
+}
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -18,17 +47,27 @@ fn main() -> Result<()> {
     match cli.command {
         Some(Commands::Workspace { action }) => match action {
             WorkspaceAction::Add { path } => {
-                let abs_path = std::fs::canonicalize(&path)
-                    .unwrap_or_else(|_| if path.is_absolute() { path } else { std::env::current_dir().unwrap().join(path) });
+                let abs_path = std::fs::canonicalize(&path).unwrap_or_else(|_| {
+                    if path.is_absolute() {
+                        path
+                    } else {
+                        std::env::current_dir().unwrap().join(path)
+                    }
+                });
                 core::workspace::add_workspace(&storage, abs_path)?;
-                println!("Workspace added. Indexing...");
+                eprintln!("Workspace added. Indexing...");
                 core::index::index_workspaces(&storage)?;
             }
             WorkspaceAction::Remove { path } => {
-                let abs_path = std::fs::canonicalize(&path)
-                    .unwrap_or_else(|_| if path.is_absolute() { path } else { std::env::current_dir().unwrap().join(path) });
+                let abs_path = std::fs::canonicalize(&path).unwrap_or_else(|_| {
+                    if path.is_absolute() {
+                        path
+                    } else {
+                        std::env::current_dir().unwrap().join(path)
+                    }
+                });
                 core::workspace::remove_workspace(&storage, abs_path.clone())?;
-                println!("Workspace removed. Cleaning up index...");
+                eprintln!("Workspace removed. Cleaning up index...");
                 let dirs = storage.list_directories()?;
                 for d in dirs {
                     if d.path.starts_with(&abs_path) {
@@ -47,8 +86,13 @@ fn main() -> Result<()> {
         }
         Some(Commands::Tag { action }) => match action {
             TagAction::Add { tag, path } => {
-                let abs_path = std::fs::canonicalize(&path)
-                    .unwrap_or_else(|_| if path.is_absolute() { path } else { std::env::current_dir().unwrap().join(path) });
+                let abs_path = std::fs::canonicalize(&path).unwrap_or_else(|_| {
+                    if path.is_absolute() {
+                        path
+                    } else {
+                        std::env::current_dir().unwrap().join(path)
+                    }
+                });
                 // Find path ID
                 let dirs = storage.list_directories()?;
                 if let Some(dir) = dirs.into_iter().find(|d| d.path == abs_path) {
@@ -58,8 +102,13 @@ fn main() -> Result<()> {
                 }
             }
             TagAction::Remove { tag, path } => {
-                let abs_path = std::fs::canonicalize(&path)
-                    .unwrap_or_else(|_| if path.is_absolute() { path } else { std::env::current_dir().unwrap().join(path) });
+                let abs_path = std::fs::canonicalize(&path).unwrap_or_else(|_| {
+                    if path.is_absolute() {
+                        path
+                    } else {
+                        std::env::current_dir().unwrap().join(path)
+                    }
+                });
                 let dirs = storage.list_directories()?;
                 if let Some(dir) = dirs.into_iter().find(|d| d.path == abs_path) {
                     storage.remove_tag(&tag, dir.id)?;
@@ -94,38 +143,24 @@ fn main() -> Result<()> {
                 return Ok(());
             }
 
-            let dirs = storage.list_directories()?;
-            let dir_id = if let Some(dir) = dirs.iter().find(|d| d.path == abs_path) {
-                dir.id
-            } else {
-                let id = storage.next_directory_id()?;
-                let name = abs_path.file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "/".to_string());
-                let depth = abs_path.components().count();
-                let project_type = core::project_detect::detect_project_type(&abs_path);
-                
-                let new_dir = storage::models::Directory {
-                    id,
-                    path: abs_path.clone(),
-                    name,
-                    depth,
-                    last_seen: Utc::now(),
-                    project_type,
-                };
-                storage.add_directory(&new_dir)?;
-                id
-            };
+            // Index this directory and its subdirectories
+            core::index::index_path(&storage, &abs_path)?;
 
-            storage.add_visit(VisitEvent {
-                path_id: dir_id,
-                timestamp: Utc::now(),
-            })?;
+            // Find dir ID for visit recording
+            let dirs = storage.list_directories()?;
+            if let Some(dir) = dirs.iter().find(|d| d.path == abs_path) {
+                storage.add_visit(VisitEvent {
+                    path_id: dir.id,
+                    timestamp: Utc::now(),
+                })?;
+            }
         }
         None => {
             let query = cli.query.join(" ");
-            
-            let selected_path = if cli.auto {
+
+            let selected_path = if let Some(direct_path) = resolve_direct_directory_query(&query)? {
+                Some(direct_path.to_string_lossy().into_owned())
+            } else if cli.auto {
                 let results = core::search::search(&storage, &query)?;
                 let mut found = None;
                 for res in results {
@@ -136,7 +171,8 @@ fn main() -> Result<()> {
                         // Dead path found, remove it and its subdirs from DB
                         let dead_path = res.directory.path.clone();
                         let dirs = storage.list_directories()?;
-                        let to_remove: Vec<u64> = dirs.iter()
+                        let to_remove: Vec<u64> = dirs
+                            .iter()
                             .filter(|d| d.path.starts_with(&dead_path))
                             .map(|d| d.id)
                             .collect();
@@ -154,10 +190,14 @@ fn main() -> Result<()> {
                 let path_buf = std::path::PathBuf::from(&path);
                 if !path_buf.exists() {
                     // This could happen if it was deleted after run_ui selected it
-                    eprintln!("Error: Directory '{}' no longer exists. Cleaning up index...", path);
+                    eprintln!(
+                        "Error: Directory '{}' no longer exists. Cleaning up index...",
+                        path
+                    );
                     // Cleanup this and all sub-directories from DB
                     let dirs = storage.list_directories()?;
-                    let to_remove: Vec<u64> = dirs.iter()
+                    let to_remove: Vec<u64> = dirs
+                        .iter()
                         .filter(|d| d.path.starts_with(&path_buf))
                         .map(|d| d.id)
                         .collect();
@@ -166,6 +206,10 @@ fn main() -> Result<()> {
                     }
                     std::process::exit(1);
                 }
+
+                // Index the selected directory and its subdirectories
+                core::index::index_path(&storage, &path_buf)?;
+
                 // Find dir for path to record visit
                 let dirs = storage.list_directories()?;
                 if let Some(dir) = dirs.into_iter().find(|d| d.path == path_buf) {
@@ -176,13 +220,27 @@ fn main() -> Result<()> {
                     storage.update_query_mapping(&query, dir.id)?;
                 }
                 println!("{}", path);
-            } else {
-                if cli.auto {
-                    std::process::exit(1);
-                }
+            } else if cli.auto {
+                std::process::exit(1);
             }
         }
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_direct_path_query;
+
+    #[test]
+    fn detects_relative_and_absolute_path_queries() {
+        assert!(is_direct_path_query("./abc/x"));
+        assert!(is_direct_path_query("..//abc/y"));
+        assert!(is_direct_path_query("/tmp"));
+        assert!(is_direct_path_query("."));
+        assert!(is_direct_path_query(".."));
+        assert!(!is_direct_path_query("my-project"));
+        assert!(!is_direct_path_query("@infra"));
+    }
 }

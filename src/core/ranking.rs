@@ -29,11 +29,11 @@ pub fn calculate_score(
     project_bonus: f64,
     weights: &RankingWeights,
 ) -> f64 {
-    weights.fuzzy * fuzzy_score +
-    weights.recency * recency_score +
-    weights.frequency * frequency_score +
-    weights.learned * learned_score +
-    weights.project * project_bonus
+    weights.fuzzy * fuzzy_score
+        + weights.recency * recency_score
+        + weights.frequency * frequency_score
+        + weights.learned * learned_score
+        + weights.project * project_bonus
 }
 
 pub fn get_recency_score(last_visited: Option<DateTime<Utc>>) -> f64 {

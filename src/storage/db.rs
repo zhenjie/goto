@@ -1,9 +1,9 @@
+use crate::storage::models::*;
 use anyhow::{Context, Result};
 use bincode;
 use directories::ProjectDirs;
 use sled::{Db, Tree};
 use std::path::{Path, PathBuf};
-use crate::storage::models::*;
 
 pub struct Storage {
     db: Db,
@@ -25,9 +25,9 @@ impl Storage {
             std::fs::create_dir_all(data_dir)?;
             data_dir.join("db")
         };
-        
+
         let db = sled::open(db_path)?;
-        
+
         Ok(Self {
             directories: db.open_tree("directories")?,
             visits: db.open_tree("visits")?,
@@ -72,7 +72,7 @@ impl Storage {
         }
         Ok(dirs)
     }
-    
+
     pub fn next_directory_id(&self) -> Result<u64> {
         Ok(self.db.generate_id()?)
     }
@@ -129,17 +129,25 @@ impl Storage {
                 m.count += 1;
                 m
             } else {
-                QueryMapping { query: query.to_string(), path_id, count: 1 }
+                QueryMapping {
+                    query: query.to_string(),
+                    path_id,
+                    count: 1,
+                }
             }
         } else {
-            QueryMapping { query: query.to_string(), path_id, count: 1 }
+            QueryMapping {
+                query: query.to_string(),
+                path_id,
+                count: 1,
+            }
         };
-        
+
         let value = bincode::serialize(&mapping)?;
         self.query_mappings.insert(key, value)?;
         Ok(())
     }
-    
+
     pub fn get_query_mappings(&self) -> Result<Vec<QueryMapping>> {
         let mut mappings = Vec::new();
         for item in self.query_mappings.iter() {
