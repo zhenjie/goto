@@ -19,6 +19,28 @@ Add this to your shell config (e.g., `~/.bashrc` or `~/.zshrc`):
 
 ### Zsh / Bash
 ```bash
+# Register current directory after successful directory changes.
+__goto_register_pwd() {
+  command goto register "$PWD" >/dev/null 2>&1 || true
+}
+
+# Hook builtins so plain cd/pushd/popd also update goto history/index.
+cd() {
+  builtin cd "$@" || return
+  __goto_register_pwd
+}
+
+pushd() {
+  builtin pushd "$@" || return
+  __goto_register_pwd
+}
+
+popd() {
+  builtin popd "$@" || return
+  __goto_register_pwd
+}
+
+# cd integration
 g() {
   local dir
   if [ "$#" -eq 1 ] && [ "$1" = "-" ]; then
@@ -39,6 +61,7 @@ g() {
   fi
 }
 
+# always-interactive cd
 gi() {
   local dir
   dir="$(goto "$@")"
@@ -46,6 +69,7 @@ gi() {
     cd "$dir"
   fi
 }
+
 ```
 
 ## Usage

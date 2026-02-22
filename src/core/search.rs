@@ -9,6 +9,23 @@ pub struct SearchResult {
     pub score: f64,
 }
 
+fn split_tag_query(query: &str) -> (Option<&str>, &str) {
+    if !query.starts_with('@') {
+        return (None, query);
+    }
+
+    let mut parts = query.splitn(2, char::is_whitespace);
+    let first = parts.next().unwrap_or_default();
+    let rest = parts.next().unwrap_or_default().trim();
+    let tag = first.trim_start_matches('@');
+
+    if tag.is_empty() {
+        (None, rest)
+    } else {
+        (Some(tag), rest)
+    }
+}
+
 pub fn search(storage: &Storage, query: &str) -> Result<Vec<SearchResult>> {
     let directories = storage.list_directories()?;
     let visits = storage.list_visits()?;
@@ -31,12 +48,8 @@ pub fn search(storage: &Storage, query: &str) -> Result<Vec<SearchResult>> {
 
     let mut results = Vec::new();
 
-    let tag_matches: HashMap<u64, bool> = if query.starts_with('@') {
-        let tag_name = query
-            .split_whitespace()
-            .next()
-            .unwrap_or("@")
-            .trim_start_matches('@');
+    let (tag_name, path_query) = split_tag_query(query);
+    let tag_matches: HashMap<u64, bool> = if let Some(tag_name) = tag_name {
         tags.iter()
             .filter(|t| t.name == tag_name)
             .map(|t| (t.path_id, true))
@@ -47,14 +60,20 @@ pub fn search(storage: &Storage, query: &str) -> Result<Vec<SearchResult>> {
 
     for dir in directories {
         let path_str = dir.path.to_string_lossy();
+        let is_tag_match = tag_matches.contains_key(&dir.id);
 
-        if !crate::core::matcher::match_path(&path_str, query) {
+        if tag_name.is_some() {
+            if !is_tag_match {
+                continue;
+            }
+            if !path_query.is_empty() && !crate::core::matcher::match_path(&path_str, path_query) {
+                continue;
+            }
+        } else if !crate::core::matcher::match_path(&path_str, query) {
             continue;
         }
 
         let fuzzy_score = 1.0f64;
-
-        let is_tag_match = tag_matches.contains_key(&dir.id);
 
         let recency_score = get_recency_score(recency_map.get(&dir.id).cloned());
         let frequency_score = frequency_map.get(&dir.id).cloned().unwrap_or(0) as f64 / max_freq;

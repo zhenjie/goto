@@ -12,6 +12,23 @@ use std::io::{self, IsTerminal, Read, Write};
 const MAX_VISIBLE_ITEMS: usize = 8;
 const EVENT_POLL_MS: u64 = 100;
 
+fn split_tag_query(query: &str) -> (Option<&str>, &str) {
+    if !query.starts_with('@') {
+        return (None, query);
+    }
+
+    let mut parts = query.splitn(2, char::is_whitespace);
+    let first = parts.next().unwrap_or_default();
+    let rest = parts.next().unwrap_or_default().trim();
+    let tag = first.trim_start_matches('@');
+
+    if tag.is_empty() {
+        (None, rest)
+    } else {
+        (Some(tag), rest)
+    }
+}
+
 pub struct App<'a> {
     pub query: String,
     pub query_cursor: usize,
@@ -315,13 +332,8 @@ impl<'a> App<'a> {
 
         let mut results = Vec::new();
 
-        let tag_matches: HashMap<u64, bool> = if self.query.starts_with('@') {
-            let tag_name = self
-                .query
-                .split_whitespace()
-                .next()
-                .unwrap_or("@")
-                .trim_start_matches('@');
+        let (tag_name, path_query) = split_tag_query(&self.query);
+        let tag_matches: HashMap<u64, bool> = if let Some(tag_name) = tag_name {
             self.cached_tags
                 .iter()
                 .filter(|t| t.name == tag_name)
@@ -333,13 +345,22 @@ impl<'a> App<'a> {
 
         for dir in &self.cached_directories {
             let path_str = dir.path.to_string_lossy();
+            let is_tag_match = tag_matches.contains_key(&dir.id);
 
-            if !crate::core::matcher::match_path(&path_str, &self.query) {
+            if tag_name.is_some() {
+                if !is_tag_match {
+                    continue;
+                }
+                if !path_query.is_empty()
+                    && !crate::core::matcher::match_path(&path_str, path_query)
+                {
+                    continue;
+                }
+            } else if !crate::core::matcher::match_path(&path_str, &self.query) {
                 continue;
             }
 
             let fuzzy_score = 1.0f64;
-            let is_tag_match = tag_matches.contains_key(&dir.id);
             let effective_fuzzy =
                 (fuzzy_score + if is_tag_match { 1.0f64 } else { 0.0f64 }).min(1.0f64);
             let project_bonus = get_project_bonus(&dir.project_type);
