@@ -14,6 +14,18 @@ Intelligent Directory Navigator in Rust.
 cargo install --path .
 ```
 
+## Database Path
+By default, `goto` stores its database at:
+
+- `$XDG_DATA_HOME/goto/db` when `XDG_DATA_HOME` is set
+- `~/.local/share/goto/db` otherwise (Linux default)
+
+You can override this path with:
+
+```bash
+export GOTO_DB_PATH=/path/to/custom/goto-db
+```
+
 ## Shell Integration
 Add this to your shell config (e.g., `~/.bashrc` or `~/.zshrc`):
 
