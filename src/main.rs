@@ -8,6 +8,8 @@ use anyhow::Result;
 use chrono::Utc;
 use clap::Parser;
 use cli::{Cli, Commands, TagAction, WorkspaceAction};
+use core::index::WorkspaceIndexEvent;
+use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 use storage::db::Storage;
 use storage::models::VisitEvent;
@@ -97,23 +99,86 @@ fn main() -> Result<()> {
                 let abs_path = resolve_input_path(&path)?;
                 core::workspace::add_workspace(&storage, abs_path, force)?;
                 eprintln!("Workspace added. Indexing...");
-                core::index::index_workspaces(&storage)?;
+                let mut last_printed = 0usize;
+                let mut line_dirty = false;
+                let stats = core::index::index_workspaces_with_progress(&storage, |event| {
+                    match event {
+                        WorkspaceIndexEvent::Start { index, total, path } => {
+                            if line_dirty {
+                                eprintln!();
+                                line_dirty = false;
+                            }
+                            last_printed = 0;
+                            eprintln!("Indexing workspace [{index}/{total}]: {}", path.display());
+                        }
+                        WorkspaceIndexEvent::Progress {
+                            index,
+                            total,
+                            path,
+                            scanned,
+                            added,
+                            updated,
+                        } => {
+                            if scanned == 1
+                                || scanned % 500 == 0
+                                || scanned.saturating_sub(last_printed) >= 500
+                            {
+                                eprint!(
+                                    "\rIndexing workspace [{index}/{total}]: {} | scanned {scanned}, added {added}, updated {updated}",
+                                    path.display()
+                                );
+                                let _ = io::stderr().flush();
+                                last_printed = scanned;
+                                line_dirty = true;
+                            }
+                        }
+                        WorkspaceIndexEvent::Complete {
+                            index,
+                            total,
+                            path,
+                            scanned,
+                            added,
+                            updated,
+                        } => {
+                            eprintln!(
+                                "\rIndexing workspace [{index}/{total}]: {} | scanned {scanned}, added {added}, updated {updated}",
+                                path.display()
+                            );
+                            line_dirty = false;
+                        }
+                    }
+                })?;
+                if line_dirty {
+                    eprintln!();
+                }
+                eprintln!(
+                    "Index complete: scanned {}, added {}, updated {}, removed {} directories.",
+                    stats.scanned, stats.added, stats.updated, stats.removed
+                );
             }
             WorkspaceAction::Remove { path } => {
-                let abs_path = std::fs::canonicalize(&path).unwrap_or_else(|_| {
-                    if path.is_absolute() {
-                        path
-                    } else {
-                        std::env::current_dir().unwrap().join(path)
-                    }
-                });
+                let abs_path = resolve_input_path(&path)?;
                 core::workspace::remove_workspace(&storage, abs_path.clone())?;
                 eprintln!("Workspace removed. Cleaning up index...");
-                let dirs = storage.list_directories()?;
-                for d in dirs {
-                    if d.path.starts_with(&abs_path) {
-                        storage.remove_directory(d.id)?;
-                    }
+                let mut last_printed = 0usize;
+                let removed = core::index::remove_indexed_subdirs_with_progress(
+                    &storage,
+                    &abs_path,
+                    |done, total| {
+                        if total == 0 {
+                            return;
+                        }
+                        if done == 1 || done == total || done.saturating_sub(last_printed) >= 500 {
+                            eprint!("\rCleaning up index... {done}/{total}");
+                            let _ = io::stderr().flush();
+                            last_printed = done;
+                        }
+                    },
+                )?;
+                if removed > 0 {
+                    eprintln!("\rCleanup complete: removed {removed} directories.");
+                } else {
+                    eprintln!("Cleanup complete: removed 0 directories.");
                 }
             }
             WorkspaceAction::List => {
@@ -123,7 +188,63 @@ fn main() -> Result<()> {
             }
         },
         Some(Commands::Index) => {
-            core::index::index_workspaces(&storage)?;
+            let mut last_printed = 0usize;
+            let mut line_dirty = false;
+            let stats = core::index::index_workspaces_with_progress(
+                &storage,
+                |event| match event {
+                    WorkspaceIndexEvent::Start { index, total, path } => {
+                        if line_dirty {
+                            eprintln!();
+                            line_dirty = false;
+                        }
+                        last_printed = 0;
+                        eprintln!("Indexing workspace [{index}/{total}]: {}", path.display());
+                    }
+                    WorkspaceIndexEvent::Progress {
+                        index,
+                        total,
+                        path,
+                        scanned,
+                        added,
+                        updated,
+                    } => {
+                        if scanned == 1
+                            || scanned % 500 == 0
+                            || scanned.saturating_sub(last_printed) >= 500
+                        {
+                            eprint!(
+                                "\rIndexing workspace [{index}/{total}]: {} | scanned {scanned}, added {added}, updated {updated}",
+                                path.display()
+                            );
+                            let _ = io::stderr().flush();
+                            last_printed = scanned;
+                            line_dirty = true;
+                        }
+                    }
+                    WorkspaceIndexEvent::Complete {
+                        index,
+                        total,
+                        path,
+                        scanned,
+                        added,
+                        updated,
+                    } => {
+                        eprintln!(
+                            "\rIndexing workspace [{index}/{total}]: {} | scanned {scanned}, added {added}, updated {updated}",
+                            path.display()
+                        );
+                        line_dirty = false;
+                    }
+                },
+            )?;
+            if line_dirty {
+                eprintln!();
+            }
+            eprintln!(
+                "Index complete: scanned {}, added {}, updated {}, removed {} directories across {} workspace(s).",
+                stats.scanned, stats.added, stats.updated, stats.removed, stats.workspaces
+            );
         }
         Some(Commands::Tag { action }) => match action {
             TagAction::Add { tag, path } => {

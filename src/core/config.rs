@@ -14,7 +14,7 @@ const DEFAULT_IGNORE_NAMES: &[&str] = &[
     "venv",
     "__pycache__",
 ];
-const DEFAULT_IGNORE_PATHS: &[&str] = &["/tmp"];
+const DEFAULT_IGNORE_PATHS: &[&str] = &[];
 
 #[derive(Debug, Default)]
 pub struct IgnoreConfig {
@@ -40,15 +40,22 @@ impl IgnoreConfig {
         let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
 
         if let Some(name) = canonical.file_name() {
-            let candidate = name.to_string_lossy().to_lowercase();
-            if self.names.iter().any(|n| n == &candidate) {
+            let candidate = name.to_string_lossy();
+            if self.matches_name(&candidate) {
                 return true;
             }
         }
 
-        self.paths
-            .iter()
-            .any(|ignored| canonical.starts_with(ignored))
+        self.matches_path_prefix(&canonical)
+    }
+
+    pub fn matches_name(&self, name: &str) -> bool {
+        let candidate = name.to_lowercase();
+        self.names.iter().any(|n| n == &candidate)
+    }
+
+    pub fn matches_path_prefix(&self, path: &Path) -> bool {
+        self.paths.iter().any(|ignored| path.starts_with(ignored))
     }
 }
 
@@ -120,9 +127,9 @@ mod tests {
         let missing = test_dir("missing-config").join("config.toml");
         let cfg = load_ignore_config_from_path(&missing).expect("loads default config");
 
-        assert!(cfg.is_ignored(std::path::Path::new("/tmp")));
-        assert!(cfg.is_ignored(std::path::Path::new("/tmp/something")));
+        assert!(cfg.is_ignored(std::path::Path::new("/project/__pycache__")));
         assert!(cfg.is_ignored(std::path::Path::new("/project/target")));
+        assert!(!cfg.is_ignored(std::path::Path::new("/tmp/something")));
         assert!(!cfg.is_ignored(std::path::Path::new("/project/src")));
     }
 
@@ -141,7 +148,7 @@ mod tests {
 
         assert!(cfg.is_ignored(std::path::Path::new("/code/vendor")));
         assert!(cfg.is_ignored(std::path::Path::new("/opt/big-monorepo/app")));
-        assert!(cfg.is_ignored(std::path::Path::new("/tmp")));
+        assert!(cfg.is_ignored(std::path::Path::new("/project/node_modules")));
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -159,7 +166,7 @@ mod tests {
 
         let cfg = load_ignore_config_from_path(&config_path).expect("loads config");
 
-        assert!(!cfg.is_ignored(std::path::Path::new("/tmp")));
+        assert!(!cfg.is_ignored(std::path::Path::new("/project/node_modules")));
         assert!(cfg.is_ignored(std::path::Path::new("/var/tmp/custom/service")));
 
         let _ = std::fs::remove_dir_all(root);
