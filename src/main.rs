@@ -89,6 +89,24 @@ fn resolve_input_path(input_path: &Path) -> Result<PathBuf> {
     Ok(resolve_input_path_from_base(&cwd, input_path))
 }
 
+fn is_confirmation_accepted(input: &str) -> bool {
+    matches!(input.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
+fn confirm_purge(force: bool) -> Result<bool> {
+    if force {
+        return Ok(true);
+    }
+
+    eprintln!("WARNING: This will permanently remove all goto data, including workspaces.");
+    eprint!("Type 'yes' to continue: ");
+    io::stderr().flush()?;
+
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    Ok(is_confirmation_accepted(&answer))
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let storage = Storage::new()?;
@@ -294,6 +312,18 @@ fn main() -> Result<()> {
             let dirs = storage.list_directories()?;
             println!("Indexed directories: {}", dirs.len());
         }
+        Some(Commands::Purge { force }) => {
+            if !confirm_purge(force)? {
+                eprintln!("Purge cancelled.");
+                return Ok(());
+            }
+
+            let stats = storage.purge_all()?;
+            eprintln!(
+                "Purge complete: removed {} directories, {} visits, {} query mappings, {} tags, {} workspaces.",
+                stats.directories, stats.visits, stats.query_mappings, stats.tags, stats.workspaces
+            );
+        }
         Some(Commands::Register { path }) => {
             let abs_path = if path.is_absolute() {
                 path
@@ -398,7 +428,7 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_direct_path_query, resolve_input_path_from_base};
+    use super::{is_confirmation_accepted, is_direct_path_query, resolve_input_path_from_base};
     use std::path::{Path, PathBuf};
 
     #[test]
@@ -417,5 +447,13 @@ mod tests {
         let base = Path::new("/home/abc");
         let resolved = resolve_input_path_from_base(base, Path::new("../../"));
         assert_eq!(resolved, PathBuf::from("/"));
+    }
+
+    #[test]
+    fn purge_confirmation_accepts_yes_and_y() {
+        assert!(is_confirmation_accepted("yes"));
+        assert!(is_confirmation_accepted("Y"));
+        assert!(is_confirmation_accepted("  Yes  "));
+        assert!(!is_confirmation_accepted("no"));
     }
 }

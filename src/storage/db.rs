@@ -14,6 +14,15 @@ pub struct Storage {
     workspaces: Tree,
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PurgeStats {
+    pub directories: usize,
+    pub visits: usize,
+    pub query_mappings: usize,
+    pub tags: usize,
+    pub workspaces: usize,
+}
+
 impl Storage {
     pub fn new() -> Result<Self> {
         let db_path = if let Ok(path) = std::env::var("GOTO_DB_PATH") {
@@ -185,5 +194,96 @@ impl Storage {
             tags.push(t);
         }
         Ok(tags)
+    }
+
+    pub fn purge_all(&self) -> Result<PurgeStats> {
+        let stats = PurgeStats {
+            directories: self.directories.len(),
+            visits: self.visits.len(),
+            query_mappings: self.query_mappings.len(),
+            tags: self.tags.len(),
+            workspaces: self.workspaces.len(),
+        };
+
+        self.directories.clear()?;
+        self.visits.clear()?;
+        self.query_mappings.clear()?;
+        self.tags.clear()?;
+        self.workspaces.clear()?;
+        self.db.flush()?;
+
+        Ok(stats)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Storage;
+    use crate::storage::models::{Directory, ProjectType, VisitEvent};
+    use chrono::Utc;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("goto-{prefix}-{}-{nanos}", std::process::id()))
+    }
+
+    #[test]
+    fn purge_all_clears_all_trees() {
+        let db_path = test_dir("db-purge");
+        let storage = Storage::new_at_path(db_path.clone()).expect("opens storage");
+
+        let root = test_dir("purge-workspace");
+        std::fs::create_dir_all(&root).expect("creates workspace dir");
+        storage
+            .add_workspace(root.clone())
+            .expect("adds workspace entry");
+
+        let dir = Directory {
+            id: storage.next_directory_id().expect("gets directory id"),
+            path: root.clone(),
+            name: "purge-workspace".to_string(),
+            depth: root.components().count(),
+            last_seen: Utc::now(),
+            project_type: ProjectType::Unknown,
+        };
+        storage.add_directory(&dir).expect("adds directory");
+        storage
+            .add_visit(VisitEvent {
+                path_id: dir.id,
+                timestamp: Utc::now(),
+            })
+            .expect("adds visit");
+        storage
+            .update_query_mapping("purge-test", dir.id)
+            .expect("adds mapping");
+        storage
+            .add_tag("tmp".to_string(), dir.id)
+            .expect("adds tag");
+
+        let stats = storage.purge_all().expect("purges database trees");
+        assert!(stats.directories >= 1);
+        assert!(stats.visits >= 1);
+        assert!(stats.query_mappings >= 1);
+        assert!(stats.tags >= 1);
+        assert!(stats.workspaces >= 1);
+
+        assert!(storage.list_directories().expect("lists dirs").is_empty());
+        assert!(storage.list_visits().expect("lists visits").is_empty());
+        assert!(
+            storage
+                .get_query_mappings()
+                .expect("lists query mappings")
+                .is_empty()
+        );
+        assert!(storage.list_tags().expect("lists tags").is_empty());
+        assert!(storage.list_workspaces().expect("lists ws").is_empty());
+
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(db_path);
     }
 }

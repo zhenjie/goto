@@ -31,6 +31,12 @@ pub enum Commands {
     },
     /// Check system status
     Doctor,
+    /// Purge all goto data (workspaces + index + history)
+    Purge {
+        /// Force purge without interactive confirmation
+        #[arg(short, long)]
+        force: bool,
+    },
     /// Register a directory visit (called by shell hooks)
     Register { path: PathBuf },
 }
