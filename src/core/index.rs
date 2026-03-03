@@ -161,7 +161,11 @@ mod tests {
         upsert_directory(&storage, &root).expect("upserts root directory");
 
         let dirs = storage.list_directories().expect("lists directories");
-        assert_eq!(dirs.len(), 1, "upsert should not recursively index children");
+        assert_eq!(
+            dirs.len(),
+            1,
+            "upsert should not recursively index children"
+        );
         assert_eq!(
             dirs[0].path,
             std::fs::canonicalize(&root).expect("canonical root path")

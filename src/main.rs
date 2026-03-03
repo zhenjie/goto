@@ -8,7 +8,7 @@ use anyhow::Result;
 use chrono::Utc;
 use clap::Parser;
 use cli::{Cli, Commands, TagAction, WorkspaceAction};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use storage::db::Storage;
 use storage::models::VisitEvent;
 
@@ -40,21 +40,62 @@ fn resolve_direct_directory_query(query: &str) -> Result<Option<PathBuf>> {
     Ok(Some(canonical))
 }
 
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    let mut has_root = false;
+
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => {
+                normalized.push(Path::new("/"));
+                has_root = true;
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() && !has_root {
+                    normalized.push("..");
+                }
+            }
+            Component::Normal(segment) => normalized.push(segment),
+        }
+    }
+
+    if normalized.as_os_str().is_empty() {
+        if has_root {
+            PathBuf::from("/")
+        } else {
+            PathBuf::from(".")
+        }
+    } else {
+        normalized
+    }
+}
+
+fn resolve_input_path_from_base(base_dir: &Path, input_path: &Path) -> PathBuf {
+    let combined = if input_path.is_absolute() {
+        input_path.to_path_buf()
+    } else {
+        base_dir.join(input_path)
+    };
+
+    std::fs::canonicalize(&combined).unwrap_or_else(|_| normalize_path(&combined))
+}
+
+fn resolve_input_path(input_path: &Path) -> Result<PathBuf> {
+    let cwd = std::env::current_dir()?;
+    Ok(resolve_input_path_from_base(&cwd, input_path))
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let storage = Storage::new()?;
 
     match cli.command {
         Some(Commands::Workspace { action }) => match action {
-            WorkspaceAction::Add { path } => {
-                let abs_path = std::fs::canonicalize(&path).unwrap_or_else(|_| {
-                    if path.is_absolute() {
-                        path
-                    } else {
-                        std::env::current_dir().unwrap().join(path)
-                    }
-                });
-                core::workspace::add_workspace(&storage, abs_path)?;
+            WorkspaceAction::Add { force, path } => {
+                let abs_path = resolve_input_path(&path)?;
+                core::workspace::add_workspace(&storage, abs_path, force)?;
                 eprintln!("Workspace added. Indexing...");
                 core::index::index_workspaces(&storage)?;
             }
@@ -145,7 +186,8 @@ fn main() -> Result<()> {
 
             // Fast path for shell hooks: upsert only current directory to avoid expensive recursive scans.
             core::index::upsert_directory(&storage, &abs_path)?;
-            let canonical_abs_path = std::fs::canonicalize(&abs_path).unwrap_or_else(|_| abs_path.clone());
+            let canonical_abs_path =
+                std::fs::canonicalize(&abs_path).unwrap_or_else(|_| abs_path.clone());
 
             // Find dir ID for visit recording
             let dirs = storage.list_directories()?;
@@ -235,7 +277,8 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_direct_path_query;
+    use super::{is_direct_path_query, resolve_input_path_from_base};
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn detects_relative_and_absolute_path_queries() {
@@ -246,5 +289,12 @@ mod tests {
         assert!(is_direct_path_query(".."));
         assert!(!is_direct_path_query("my-project"));
         assert!(!is_direct_path_query("@infra"));
+    }
+
+    #[test]
+    fn resolves_parent_traversal_to_root_for_workspace_paths() {
+        let base = Path::new("/home/abc");
+        let resolved = resolve_input_path_from_base(base, Path::new("../../"));
+        assert_eq!(resolved, PathBuf::from("/"));
     }
 }

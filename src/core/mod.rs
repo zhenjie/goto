@@ -1,3 +1,4 @@
+pub mod config;
 pub mod index;
 pub mod matcher;
 pub mod project_detect;

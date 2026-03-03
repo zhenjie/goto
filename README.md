@@ -91,6 +91,26 @@ goto workspace add ~/code
 goto index
 ```
 
+`goto workspace add` enforces ignore rules by default. Use `-f/--force` to bypass:
+
+```bash
+goto workspace add -f ~/some/ignored/path
+```
+
+Ignore rules are loaded from `~/.config/goto/config.toml`:
+
+```toml
+[ignore]
+# Optional, defaults to true
+use_defaults = true
+
+# Ignore by final directory name
+names = ["vendor", "third_party"]
+
+# Ignore by absolute path prefix (supports ~/...)
+paths = ["~/Downloads", "/mnt/huge-monorepo"]
+```
+
 ### Search and Navigate
 ```bash
 g my-project

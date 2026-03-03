@@ -38,7 +38,12 @@ pub enum Commands {
 #[derive(Subcommand)]
 pub enum WorkspaceAction {
     /// Add a workspace root
-    Add { path: PathBuf },
+    Add {
+        /// Force add even if path matches ignore rules
+        #[arg(short, long)]
+        force: bool,
+        path: PathBuf,
+    },
     /// Remove a workspace root
     Remove { path: PathBuf },
     /// List all workspace roots
