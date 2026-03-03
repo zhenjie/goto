@@ -143,12 +143,16 @@ fn main() -> Result<()> {
                 return Ok(());
             }
 
-            // Index this directory and its subdirectories
-            core::index::index_path(&storage, &abs_path)?;
+            // Fast path for shell hooks: upsert only current directory to avoid expensive recursive scans.
+            core::index::upsert_directory(&storage, &abs_path)?;
+            let canonical_abs_path = std::fs::canonicalize(&abs_path).unwrap_or_else(|_| abs_path.clone());
 
             // Find dir ID for visit recording
             let dirs = storage.list_directories()?;
-            if let Some(dir) = dirs.iter().find(|d| d.path == abs_path) {
+            if let Some(dir) = dirs
+                .iter()
+                .find(|d| d.path == abs_path || d.path == canonical_abs_path)
+            {
                 storage.add_visit(VisitEvent {
                     path_id: dir.id,
                     timestamp: Utc::now(),
@@ -207,8 +211,8 @@ fn main() -> Result<()> {
                     std::process::exit(1);
                 }
 
-                // Index the selected directory and its subdirectories
-                core::index::index_path(&storage, &path_buf)?;
+                // Keep selection flow snappy by upserting only the selected directory.
+                core::index::upsert_directory(&storage, &path_buf)?;
 
                 // Find dir for path to record visit
                 let dirs = storage.list_directories()?;

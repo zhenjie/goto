@@ -26,6 +26,10 @@ impl Storage {
             data_dir.join("db")
         };
 
+        Self::new_at_path(db_path)
+    }
+
+    pub fn new_at_path(db_path: PathBuf) -> Result<Self> {
         let db = sled::open(db_path)?;
 
         Ok(Self {
